@@ -4,9 +4,6 @@ import pickle
 import numpy as np
 from datetime import datetime
 import os
-import threading
-import av
-from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
 st.set_page_config(
     page_title="Take Attendance — FaceAttend",
@@ -28,11 +25,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 a[data-testid="stPageLink-NavLink"] { display: inline-flex; align-items: center; gap: 6px; color: #6366f1; font-size: 0.84rem; font-weight: 600; text-decoration: none; padding: 6px 0; opacity: 0.85; transition: opacity 0.15s; margin-bottom: 0.5rem; }
 a[data-testid="stPageLink-NavLink"]:hover { opacity: 1; }
 a[data-testid="stPageLink-NavLink"] p { font-weight: 600; margin: 0; color: #6366f1; }
-.stats-strip { display: flex; gap: 0; background: white; border-radius: 14px; border: 1px solid rgba(0,0,0,0.06); overflow: hidden; margin-bottom: 1.4rem; box-shadow: 0 2px 10px rgba(0,0,0,0.04); }
-.stat-item { flex: 1; padding: 0.9rem 1rem; text-align: center; border-right: 1px solid rgba(0,0,0,0.05); }
-.stat-item:last-child { border-right: none; }
-.stat-num { font-family: 'DM Serif Display', serif; font-size: 1.1rem; color: #1e1b4b; }
-.stat-lbl { font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
+div.stButton > button { border-radius: 12px !important; font-weight: 600 !important; padding: 0.55rem 1.4rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -43,13 +36,10 @@ def load_models():
     base_dir = os.path.dirname(os.path.abspath(os.path.join(__file__, "..")))
     haar_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
     face_cascade = cv2.CascadeClassifier(haar_path)
-    
     recognizer = cv2.face.LBPHFaceRecognizer_create()
     recognizer.read(os.path.join(base_dir, "face_model.yml"))
-    
     with open(os.path.join(base_dir, "labels.pkl"), "rb") as f:
         label_dict = pickle.load(f)
-        
     return face_cascade, recognizer, label_dict
 
 try:
@@ -57,75 +47,88 @@ try:
 except Exception as e:
     st.markdown('<h1 class="hero-title">Welcome to <span>FaceAttend!</span></h1>', unsafe_allow_html=True)
     st.info("👋 **It looks like your recognition system hasn't been trained yet.**\n\nThe system needs to know what your students look like before it can take attendance.")
-    st.markdown("**How to get started:**\n1. Go to the **Register** page and capture a student's face.\n2. Go to the **Manage Dataset** page and click **Retrain model**.")
-    if st.button("Go to Register Student"):
-        st.switch_page("pages/Register.py")
+    if st.button("Go to Register Student"): st.switch_page("pages/Register.py")
     st.stop()
 
 st.markdown("""
 <h1 class="hero-title">Live <span>Attendance</span> Scan</h1>
-<p class="hero-sub">
-    Point the camera at a student's face. The system detects, recognises,
-    and logs attendance automatically.
-</p>
-<div class="stats-strip">
-  <div class="stat-item">
-    <div class="stat-num">Live Logging Enabled</div>
-    <div class="stat-lbl">Check attendance_log.txt</div>
-  </div>
-</div>
+<p class="hero-sub">Automatically detect, recognize, and log student attendance.</p>
 """, unsafe_allow_html=True)
 
-# THREAD-SAFE ARCHITECTURE: Prevents silent crashes that kill the WebRTC connection
-@st.cache_resource
-def get_log_state():
-    return {"logged": set(), "lock": threading.Lock()}
+if 'logged_today' not in st.session_state:
+    st.session_state.logged_today = set()
+
+# --- HYBRID CAMERA TOGGLE ---
+cam_mode = st.radio("Select Device Type:", ["📱 Mobile Phone (Snapshot)", "💻 PC / Laptop (Live Video)"], horizontal=True)
+
+def process_face(img, from_live_video=False):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
     
-log_state = get_log_state()
+    for (x, y, w, h) in faces:
+        if w < 100 or h < 100: continue
+        face_roi = cv2.resize(gray[y:y+h, x:x+w], (200, 200))
+        label, confidence = recognizer.predict(face_roi)
 
-def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
-    try:
-        img = frame.to_ndarray(format="bgr24")
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+        if confidence < 75:
+            name = label_dict.get(label, "Unknown")
+            text = f"{name} ({int(confidence)})"
+            color = (0, 255, 0) # Green
+            
+            if name not in st.session_state.logged_today:
+                base_dir = os.path.dirname(os.path.abspath(os.path.join(__file__, "..")))
+                with open(os.path.join(base_dir, "attendance_log.txt"), "a") as log_f:
+                    log_f.write(f"{name}, {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                st.session_state.logged_today.add(name)
+                if not from_live_video:
+                    st.success(f"✅ Logged attendance for {name}!")
+        else:
+            text = "Unknown"
+            color = (0, 0, 255) # Red
 
-        for (x, y, w, h) in faces:
-            if w < 120 or h < 120: continue
+        cv2.rectangle(img, (x, y), (x+w, y+h), color, 2)
+        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+        cv2.rectangle(img, (x, y - th - 14), (x + tw + 10, y), color, -1)
+        cv2.putText(img, text, (x + 5, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    return img
 
-            face_roi = cv2.resize(gray[y:y+h, x:x+w], (200, 200))
-            label, confidence = recognizer.predict(face_roi)
+if "Mobile" in cam_mode:
+    st.info("Tap the camera below to scan a face. It uses your native phone camera instantly.")
+    pic = st.camera_input("Take Attendance Photo")
+    if pic is not None:
+        bytes_data = pic.getvalue()
+        img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+        processed_img = process_face(img, from_live_video=False)
+        st.image(cv2.cvtColor(processed_img, cv2.COLOR_BGR2RGB), use_column_width=True)
 
-            if confidence < 70:
-                name = label_dict.get(label, "Unknown")
-                text = f"{name} ({int(confidence)})"
-                color = (0, 255, 0)
-                
-                with log_state["lock"]:
-                    if name not in log_state["logged"]:
-                        base_dir = os.path.dirname(os.path.abspath(os.path.join(__file__, "..")))
-                        with open(os.path.join(base_dir, "attendance_log.txt"), "a") as log_f:
-                            log_f.write(f"{name}, {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                        log_state["logged"].add(name)
-            else:
-                text = "Unknown"
-                color = (0, 0, 255)
-
-            cv2.rectangle(img, (x, y), (x+w, y+h), color, 2)
-            (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-            cv2.rectangle(img, (x, y - th - 14), (x + tw + 10, y), color, -1)
-            cv2.putText(img, text, (x + 5, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-
-        return av.VideoFrame.from_ndarray(img, format="bgr24")
-    except Exception as e:
-        # Fallback to prevent the WebRTC stream from breaking completely
-        return frame
-
-# HARDWARE FIX: Reverted to default video constraint to prevent PC crash
-webrtc_streamer(
-    key="attendance_streamer",
-    mode=WebRtcMode.SENDRECV,
-    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-    video_frame_callback=video_frame_callback,
-    media_stream_constraints={"video": True, "audio": False},
-    async_processing=True
-)
+else:
+    st.info("Uses your PC's webcam directly. No network firewalls to worry about.")
+    
+    col1, col2 = st.columns(2)
+    if col1.button("▶ Start Live Video"):
+        st.session_state.run_live_att = True
+    if col2.button("⏹ Stop Video"):
+        st.session_state.run_live_att = False
+        if 'att_cap' in st.session_state:
+            st.session_state.att_cap.release()
+            del st.session_state.att_cap
+            
+    if st.session_state.get('run_live_att', False):
+        if 'att_cap' not in st.session_state:
+            st.session_state.att_cap = cv2.VideoCapture(0)
+            
+        cap = st.session_state.att_cap
+        frame_window = st.empty()
+        
+        if cap.isOpened():
+            ret, frame = cap.read()
+            if ret:
+                # Mirror frame for natural UI
+                frame = cv2.flip(frame, 1)
+                processed_frame = process_face(frame, from_live_video=True)
+                frame_window.image(cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB), channels="RGB")
+            
+            # Loop the script safely without freezing Streamlit
+            st.rerun()
+        else:
+            st.error("Cannot connect to PC Camera. Is another app using it?")
