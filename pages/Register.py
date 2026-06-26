@@ -5,7 +5,7 @@ import time
 import sys
 import threading
 import av
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
@@ -17,7 +17,6 @@ DATASET_DIR = os.path.join(ROOT, "dataset")
 if not os.path.exists(DATASET_DIR):
     os.makedirs(DATASET_DIR)
 
-# CRITICAL FIX: Cache the cascade model to prevent background thread crashes
 @st.cache_resource
 def load_cascade():
     haar_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
@@ -44,7 +43,6 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .stApp > div, section[data-testid="stSidebar"], .main > div { background: transparent !important; }
 div[data-testid="stTextInput"] label { color: #111827 !important; font-size: 0.95rem !important; font-weight: 700 !important; opacity: 1 !important; }
 div[data-testid="stTextInput"] input { border-radius: 12px !important; border: 2px solid #cbd5e1 !important; font-family: 'DM Sans', sans-serif !important; font-size: 1rem !important; padding: 0.75rem 1rem !important; background: #ffffff !important; color: #1e1b4b !important; -webkit-text-fill-color: #1e1b4b !important; }
-div[data-testid="stTextInput"] input:focus { border-color: #10b981 !important; box-shadow: 0 0 0 4px rgba(16,185,129,0.15) !important; background: #f0fdf4 !important; color: #1e1b4b !important; -webkit-text-fill-color: #1e1b4b !important; }
 div.stButton > button { border-radius: 12px !important; font-family: 'DM Sans', sans-serif !important; font-weight: 600 !important; font-size: 0.88rem !important; padding: 0.65rem 1.4rem !important; transition: all 0.2s ease !important; width: 100% !important; cursor: pointer !important; }
 div.stButton > button { background: linear-gradient(135deg, #10b981, #34d399) !important; color: white !important; border: none !important; box-shadow: 0 4px 14px rgba(16,185,129,0.28) !important; }
 div.stButton > button:hover { transform: translateY(-2px) !important; box-shadow: 0 6px 20px rgba(16,185,129,0.38) !important; }
@@ -55,7 +53,6 @@ a[data-testid="stPageLink-NavLink"] p { font-weight: 600; margin: 0; color: #10b
 """, unsafe_allow_html=True)
 
 TARGET_IMAGES = 30
-
 st.page_link("main.py", label="← Back to Dashboard")
 
 st.markdown("""
@@ -69,19 +66,12 @@ st.markdown("""
 name = st.text_input("Full Name", placeholder="e.g. Budi Santoso")
 nim  = st.text_input("NIM (Student ID)", placeholder="e.g. 2024001234")
 
-global_lock = threading.Lock()
-capture_status = {}
-last_cap_time = {}
-
-# CRITICAL FIX: Expanded STUN servers to guarantee mobile network traversal
-RTC_CONFIGURATION = RTCConfiguration({
-    "iceServers": [
-        {"urls": ["stun:stun.l.google.com:19302"]},
-        {"urls": ["stun:stun1.l.google.com:19302"]},
-        {"urls": ["stun:stun2.l.google.com:19302"]},
-        {"urls": ["stun:stun.services.mozilla.com"]}
-    ]
-})
+# THREAD-SAFE ARCHITECTURE for handling active photo counts
+@st.cache_resource
+def get_capture_state():
+    return {"users": {}, "lock": threading.Lock()}
+    
+cap_state = get_capture_state()
 
 if name and nim:
     user_folder = f"{name}_{nim}"
@@ -96,47 +86,46 @@ if name and nim:
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             faces = face_cascade.detectMultiScale(gray, 1.3, 5)
 
-            with global_lock:
-                if user_folder not in capture_status:
-                    capture_status[user_folder] = 0
-                    last_cap_time[user_folder] = 0
+            with cap_state["lock"]:
+                if user_folder not in cap_state["users"]:
+                    cap_state["users"][user_folder] = {"count": 0, "last_time": 0}
                 
-                count = capture_status[user_folder]
+                user_data = cap_state["users"][user_folder]
 
-                if count < TARGET_IMAGES:
+                if user_data["count"] < TARGET_IMAGES:
                     for (x, y, w, h) in faces:
                         if w < 120 or h < 120: continue
                         current_time = time.time()
-                        if current_time - last_cap_time[user_folder] > 0.2:
+                        if current_time - user_data["last_time"] > 0.2:
                             face = cv2.resize(gray[y:y+h, x:x+w], (200, 200))
-                            count += 1
-                            capture_status[user_folder] = count
-                            last_cap_time[user_folder] = current_time
-                            img_name = os.path.join(full_path, f"{count}.jpg")
+                            user_data["count"] += 1
+                            user_data["last_time"] = current_time
+                            img_name = os.path.join(full_path, f"{user_data['count']}.jpg")
                             cv2.imwrite(img_name, face)
                             break 
                 
-                color_bgr = (16, 185, 89) if count >= TARGET_IMAGES else (16, 185, 230)
+                c = user_data["count"]
+                color_bgr = (16, 185, 89) if c >= TARGET_IMAGES else (16, 185, 230)
                 for (x, y, w, h) in faces:
                     cv2.rectangle(img, (x, y), (x+w, y+h), color_bgr, 2)
-                    label = f"{count}/{TARGET_IMAGES}"
+                    label = f"{c}/{TARGET_IMAGES}"
                     (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
                     cv2.rectangle(img, (x, y - th - 14), (x + tw + 10, y), color_bgr, -1)
                     cv2.putText(img, label, (x + 5, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
             return av.VideoFrame.from_ndarray(img, format="bgr24")
-        except Exception as e:
-            # CRITICAL FIX: Return original frame on error instead of freezing the stream
+        except Exception:
             return frame
 
     st.info("📸 **Press START below.** Keep your face in view. The counter on the video will stop at 30/30.")
     
+    # HARDWARE FIX: Reverted constraints to allow desktop browsers to respond
     webrtc_streamer(
         key="register_streamer",
         mode=WebRtcMode.SENDRECV,
-        rtc_configuration=RTC_CONFIGURATION,
+        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
         video_frame_callback=video_frame_callback,
-        media_stream_constraints={"video": {"facingMode": "user"}, "audio": False},
+        media_stream_constraints={"video": True, "audio": False},
         async_processing=True
     )
 
