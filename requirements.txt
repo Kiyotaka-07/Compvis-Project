@@ -3,5 +3,3 @@ opencv-contrib-python-headless
 numpy
 pandas
 Pillow
-streamlit-webrtc
-av
