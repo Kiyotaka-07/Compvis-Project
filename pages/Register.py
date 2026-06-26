@@ -3,9 +3,7 @@ import cv2
 import os
 import time
 import sys
-import threading
-import av
-from streamlit_webrtc import webrtc_streamer, WebRtcMode
+import numpy as np
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
@@ -40,109 +38,126 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .hero-title { font-family: 'DM Serif Display', serif; font-size: clamp(2rem, 5vw, 2.9rem); color: #1e1b4b; line-height: 1.18; margin: 0.4rem 0 0.6rem 0; font-weight: 400; }
 .hero-title span { font-style: italic; color: #10b981; }
 .hero-sub { color: #475569; font-size: 1rem; font-weight: 400; line-height: 1.65; max-width: 520px; margin-bottom: 1.8rem; }
-.stApp > div, section[data-testid="stSidebar"], .main > div { background: transparent !important; }
-div[data-testid="stTextInput"] label { color: #111827 !important; font-size: 0.95rem !important; font-weight: 700 !important; opacity: 1 !important; }
-div[data-testid="stTextInput"] input { border-radius: 12px !important; border: 2px solid #cbd5e1 !important; font-family: 'DM Sans', sans-serif !important; font-size: 1rem !important; padding: 0.75rem 1rem !important; background: #ffffff !important; color: #1e1b4b !important; -webkit-text-fill-color: #1e1b4b !important; }
-div.stButton > button { border-radius: 12px !important; font-family: 'DM Sans', sans-serif !important; font-weight: 600 !important; font-size: 0.88rem !important; padding: 0.65rem 1.4rem !important; transition: all 0.2s ease !important; width: 100% !important; cursor: pointer !important; }
-div.stButton > button { background: linear-gradient(135deg, #10b981, #34d399) !important; color: white !important; border: none !important; box-shadow: 0 4px 14px rgba(16,185,129,0.28) !important; }
-div.stButton > button:hover { transform: translateY(-2px) !important; box-shadow: 0 6px 20px rgba(16,185,129,0.38) !important; }
 a[data-testid="stPageLink-NavLink"] { display: inline-flex; align-items: center; gap: 6px; color: #10b981; font-size: 0.84rem; font-weight: 600; text-decoration: none; padding: 6px 0; opacity: 0.85; transition: opacity 0.15s; margin-bottom: 0.5rem; }
 a[data-testid="stPageLink-NavLink"]:hover { opacity: 1; }
 a[data-testid="stPageLink-NavLink"] p { font-weight: 600; margin: 0; color: #10b981; }
+div.stButton > button { border-radius: 12px !important; font-weight: 600 !important; width: 100% !important; }
 </style>
 """, unsafe_allow_html=True)
 
-TARGET_IMAGES = 30
 st.page_link("main.py", label="← Back to Dashboard")
 
 st.markdown("""
 <h1 class="hero-title">Register New <span>Student</span></h1>
-<p class="hero-sub">
-    Fill in the student details below, then let the camera capture
-    30 face samples automatically to train the recognition model.
-</p>
+<p class="hero-sub">Fill in the student details below to capture their face profile.</p>
 """, unsafe_allow_html=True)
 
 name = st.text_input("Full Name", placeholder="e.g. Budi Santoso")
 nim  = st.text_input("NIM (Student ID)", placeholder="e.g. 2024001234")
 
-# THREAD-SAFE ARCHITECTURE for handling active photo counts
-@st.cache_resource
-def get_capture_state():
-    return {"users": {}, "lock": threading.Lock()}
-    
-cap_state = get_capture_state()
-
 if name and nim:
     user_folder = f"{name}_{nim}"
     full_path   = os.path.join(DATASET_DIR, user_folder)
-    
     if not os.path.exists(full_path):
         os.makedirs(full_path)
 
-    def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
-        try:
-            img = frame.to_ndarray(format="bgr24")
+    cam_mode = st.radio("Select Capture Mode:", ["📱 Mobile Snapshot (Capture 5 distinct photos)", "💻 PC Live Video (Auto-capture 30 frames)"], horizontal=True)
+
+    if "Mobile" in cam_mode:
+        st.info("Take 5 clear pictures of your face. Move your head slightly between shots for better AI accuracy.")
+        
+        if 'mobile_count' not in st.session_state:
+            st.session_state.mobile_count = len(os.listdir(full_path)) if os.path.exists(full_path) else 0
+
+        st.progress(min(st.session_state.mobile_count / 5.0, 1.0), text=f"Captured {st.session_state.mobile_count} / 5 photos")
+
+        pic = st.camera_input("Capture Face")
+        if pic is not None:
+            bytes_data = pic.getvalue()
+            img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             faces = face_cascade.detectMultiScale(gray, 1.3, 5)
 
-            with cap_state["lock"]:
-                if user_folder not in cap_state["users"]:
-                    cap_state["users"][user_folder] = {"count": 0, "last_time": 0}
-                
-                user_data = cap_state["users"][user_folder]
-
-                if user_data["count"] < TARGET_IMAGES:
-                    for (x, y, w, h) in faces:
-                        if w < 120 or h < 120: continue
-                        current_time = time.time()
-                        if current_time - user_data["last_time"] > 0.2:
-                            face = cv2.resize(gray[y:y+h, x:x+w], (200, 200))
-                            user_data["count"] += 1
-                            user_data["last_time"] = current_time
-                            img_name = os.path.join(full_path, f"{user_data['count']}.jpg")
-                            cv2.imwrite(img_name, face)
-                            break 
-                
-                c = user_data["count"]
-                color_bgr = (16, 185, 89) if c >= TARGET_IMAGES else (16, 185, 230)
+            if len(faces) == 0:
+                st.warning("No face detected in that photo! Please try again.")
+            else:
                 for (x, y, w, h) in faces:
-                    cv2.rectangle(img, (x, y), (x+w, y+h), color_bgr, 2)
-                    label = f"{c}/{TARGET_IMAGES}"
-                    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-                    cv2.rectangle(img, (x, y - th - 14), (x + tw + 10, y), color_bgr, -1)
-                    cv2.putText(img, label, (x + 5, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    face = cv2.resize(gray[y:y+h, x:x+w], (200, 200))
+                    st.session_state.mobile_count += 1
+                    cv2.imwrite(os.path.join(full_path, f"mobile_{st.session_state.mobile_count}.jpg"), face)
+                    st.success(f"Photo {st.session_state.mobile_count} saved successfully!")
+                    break # Only save one face per photo
 
-            return av.VideoFrame.from_ndarray(img, format="bgr24")
-        except Exception:
-            return frame
-
-    st.info("📸 **Press START below.** Keep your face in view. The counter on the video will stop at 30/30.")
-    
-    # HARDWARE FIX: Reverted constraints to allow desktop browsers to respond
-    webrtc_streamer(
-        key="register_streamer",
-        mode=WebRtcMode.SENDRECV,
-        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-        video_frame_callback=video_frame_callback,
-        media_stream_constraints={"video": True, "audio": False},
-        async_processing=True
-    )
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    if st.button("Complete Registration & Train Model"):
-        if len(os.listdir(full_path)) > 0:
-            with st.spinner("Processing images — this may take a moment…"):
-                try:
+        if st.session_state.mobile_count >= 5:
+            if st.button("Complete Registration & Train AI"):
+                with st.spinner("Training recognition model..."):
                     train_model()
-                    st.markdown(f"""
-<div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); border-radius: 18px; padding: 2rem; text-align: center; box-shadow: 0 10px 40px rgba(16, 185, 129, 0.3); margin: 1rem 0; border: 3px solid #059669;">
-    <h2 style="color: white; margin: 0 0 0.5rem 0; font-size: 1.8rem; font-weight: 700;">Registration Successful!</h2>
-    <p style="color: #dcfce7; margin: 0.5rem 0 0; font-size: 1.1rem; font-weight: 500;"><strong>{name}</strong> ({nim}) has been added to the recognition system.</p>
-</div>
-""", unsafe_allow_html=True)
-                except ValueError as e:
-                    st.error(f"Cannot complete registration: {e}")
-        else:
-            st.error("No faces captured. Please ensure the camera sees your face and try again.")
+                    st.success(f"Successfully registered and trained {name}!")
+
+    else:
+        TARGET_IMAGES = 30
+        st.info("Press Start. The camera will automatically capture 30 frames of your face.")
+        
+        col1, col2 = st.columns(2)
+        if col1.button("▶ Start Auto-Capture"):
+            st.session_state.run_live_reg = True
+            st.session_state.capture_count = 0
+            st.session_state.last_cap_time = time.time()
+            
+        if col2.button("⏹ Stop & Reset"):
+            st.session_state.run_live_reg = False
+            st.session_state.capture_count = 0
+            if 'reg_cap' in st.session_state:
+                st.session_state.reg_cap.release()
+                del st.session_state.reg_cap
+
+        if st.session_state.get('run_live_reg', False):
+            if 'reg_cap' not in st.session_state:
+                st.session_state.reg_cap = cv2.VideoCapture(0)
+                
+            cap = st.session_state.reg_cap
+            frame_window = st.empty()
+            
+            if cap.isOpened():
+                ret, frame = cap.read()
+                if ret:
+                    frame = cv2.flip(frame, 1)
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+                    
+                    count = st.session_state.capture_count
+                    
+                    for (x, y, w, h) in faces:
+                        if w < 100 or h < 100: continue
+                        current_time = time.time()
+                        
+                        if current_time - st.session_state.last_cap_time > 0.15:
+                            face = cv2.resize(gray[y:y+h, x:x+w], (200, 200))
+                            count += 1
+                            st.session_state.capture_count = count
+                            st.session_state.last_cap_time = current_time
+                            cv2.imwrite(os.path.join(full_path, f"pc_{count}.jpg"), face)
+                        
+                        color = (16, 185, 89) if count >= TARGET_IMAGES else (16, 185, 230)
+                        cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
+                        label = f"{count}/{TARGET_IMAGES}"
+                        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+                        cv2.rectangle(frame, (x, y - th - 14), (x + tw + 10, y), color, -1)
+                        cv2.putText(frame, label, (x + 5, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                        break 
+                        
+                frame_window.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB")
+                
+                if st.session_state.capture_count >= TARGET_IMAGES:
+                    st.session_state.run_live_reg = False
+                    cap.release()
+                    del st.session_state.reg_cap
+                    st.success("Capture complete! Click below to train the model.")
+                else:
+                    st.rerun()
+
+        if st.session_state.get('capture_count', 0) >= TARGET_IMAGES:
+            if st.button("Complete Registration & Train AI"):
+                with st.spinner("Training recognition model..."):
+                    train_model()
+                    st.success(f"Successfully registered and trained {name}!")
