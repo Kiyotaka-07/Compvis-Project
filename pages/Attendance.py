@@ -25,7 +25,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 a[data-testid="stPageLink-NavLink"] { display: inline-flex; align-items: center; gap: 6px; color: #6366f1; font-size: 0.84rem; font-weight: 600; text-decoration: none; padding: 6px 0; opacity: 0.85; transition: opacity 0.15s; margin-bottom: 0.5rem; }
 a[data-testid="stPageLink-NavLink"]:hover { opacity: 1; }
 a[data-testid="stPageLink-NavLink"] p { font-weight: 600; margin: 0; color: #6366f1; }
-div.stButton > button { border-radius: 12px !important; font-weight: 600 !important; padding: 0.55rem 1.4rem !important; }
+div.stButton > button { border-radius: 12px !important; font-weight: 600 !important; width: 100% !important; padding: 0.65rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -51,84 +51,64 @@ except Exception as e:
     st.stop()
 
 st.markdown("""
-<h1 class="hero-title">Live <span>Attendance</span> Scan</h1>
-<p class="hero-sub">Automatically detect, recognize, and log student attendance.</p>
+<h1 class="hero-title">Take <span>Attendance</span></h1>
+<p class="hero-sub">Snap a clear photo of the student's face to instantly log their attendance.</p>
 """, unsafe_allow_html=True)
 
 if 'logged_today' not in st.session_state:
     st.session_state.logged_today = set()
 
-# --- HYBRID CAMERA TOGGLE ---
-cam_mode = st.radio("Select Device Type:", ["📱 Mobile Phone (Snapshot)", "💻 PC / Laptop (Live Video)"], horizontal=True)
+if 'att_cam_key' not in st.session_state:
+    st.session_state.att_cam_key = 0
 
-def process_face(img, from_live_video=False):
+pic = st.camera_input("Scan Face", key=f"att_cam_{st.session_state.att_cam_key}")
+
+if pic is not None:
+    bytes_data = pic.getvalue()
+    img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-    
-    for (x, y, w, h) in faces:
-        if w < 100 or h < 100: continue
-        face_roi = cv2.resize(gray[y:y+h, x:x+w], (200, 200))
-        label, confidence = recognizer.predict(face_roi)
 
-        if confidence < 75:
-            name = label_dict.get(label, "Unknown")
-            text = f"{name} ({int(confidence)})"
-            color = (0, 255, 0) # Green
+    if len(faces) == 0:
+        st.error("No face detected! Please ensure your face is well-lit and try again.")
+    else:
+        detected = False
+        for (x, y, w, h) in faces:
+            if w < 80 or h < 80: continue
             
-            if name not in st.session_state.logged_today:
-                base_dir = os.path.dirname(os.path.abspath(os.path.join(__file__, "..")))
-                with open(os.path.join(base_dir, "attendance_log.txt"), "a") as log_f:
-                    log_f.write(f"{name}, {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                st.session_state.logged_today.add(name)
-                if not from_live_video:
-                    st.success(f"✅ Logged attendance for {name}!")
-        else:
-            text = "Unknown"
-            color = (0, 0, 255) # Red
+            face_roi = cv2.resize(gray[y:y+h, x:x+w], (200, 200))
+            label, confidence = recognizer.predict(face_roi)
 
-        cv2.rectangle(img, (x, y), (x+w, y+h), color, 2)
-        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-        cv2.rectangle(img, (x, y - th - 14), (x + tw + 10, y), color, -1)
-        cv2.putText(img, text, (x + 5, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-    return img
+            if confidence < 75:
+                name = label_dict.get(label, "Unknown")
+                text = f"{name} ({int(confidence)})"
+                color = (0, 255, 0)
+                
+                if name not in st.session_state.logged_today:
+                    base_dir = os.path.dirname(os.path.abspath(os.path.join(__file__, "..")))
+                    with open(os.path.join(base_dir, "attendance_log.txt"), "a") as log_f:
+                        log_f.write(f"{name}, {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    st.session_state.logged_today.add(name)
+                    st.success(f"✅ Logged attendance for **{name}**!")
+                else:
+                    st.info(f"ℹ️ **{name}** is already logged for today.")
+            else:
+                text = "Unknown"
+                color = (0, 0, 255)
+                st.error("Face not recognized! Please register this student.")
 
-if "Mobile" in cam_mode:
-    st.info("Tap the camera below to scan a face. It uses your native phone camera instantly.")
-    pic = st.camera_input("Take Attendance Photo")
-    if pic is not None:
-        bytes_data = pic.getvalue()
-        img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
-        processed_img = process_face(img, from_live_video=False)
-        st.image(cv2.cvtColor(processed_img, cv2.COLOR_BGR2RGB), use_column_width=True)
+            cv2.rectangle(img, (x, y), (x+w, y+h), color, 2)
+            (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+            cv2.rectangle(img, (x, y - th - 14), (x + tw + 10, y), color, -1)
+            cv2.putText(img, text, (x + 5, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            detected = True
+            break # Only process the most prominent face
 
-else:
-    st.info("Uses your PC's webcam directly. No network firewalls to worry about.")
-    
-    col1, col2 = st.columns(2)
-    if col1.button("▶ Start Live Video"):
-        st.session_state.run_live_att = True
-    if col2.button("⏹ Stop Video"):
-        st.session_state.run_live_att = False
-        if 'att_cap' in st.session_state:
-            st.session_state.att_cap.release()
-            del st.session_state.att_cap
-            
-    if st.session_state.get('run_live_att', False):
-        if 'att_cap' not in st.session_state:
-            st.session_state.att_cap = cv2.VideoCapture(0)
-            
-        cap = st.session_state.att_cap
-        frame_window = st.empty()
+        if not detected:
+            st.warning("Face too small or unclear. Get closer to the camera.")
         
-        if cap.isOpened():
-            ret, frame = cap.read()
-            if ret:
-                # Mirror frame for natural UI
-                frame = cv2.flip(frame, 1)
-                processed_frame = process_face(frame, from_live_video=True)
-                frame_window.image(cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB), channels="RGB")
-            
-            # Loop the script safely without freezing Streamlit
-            st.rerun()
-        else:
-            st.error("Cannot connect to PC Camera. Is another app using it?")
+        st.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), use_column_width=True)
+
+    if st.button("📸 Scan Next Person"):
+        st.session_state.att_cam_key += 1
+        st.rerun()
