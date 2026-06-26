@@ -6,7 +6,7 @@ from datetime import datetime
 import os
 import threading
 import av
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
 st.set_page_config(
     page_title="Take Attendance — FaceAttend",
@@ -38,7 +38,6 @@ a[data-testid="stPageLink-NavLink"] p { font-weight: 600; margin: 0; color: #636
 
 st.page_link("main.py", label="← Back to Dashboard")
 
-# CRITICAL FIX: Cache the models so the async video thread doesn't crash when Streamlit reruns
 @st.cache_resource
 def load_models():
     base_dir = os.path.dirname(os.path.abspath(os.path.join(__file__, "..")))
@@ -77,22 +76,12 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-st.info("💡 **Tip:** Press **START** below. Use the dropdown menu to switch between your front and back cameras on mobile.")
-
-if 'logged_users' not in st.session_state:
-    st.session_state.logged_users = set()
-
-log_lock = threading.Lock()
-
-# CRITICAL FIX: Expanded STUN servers to guarantee mobile network traversal
-RTC_CONFIGURATION = RTCConfiguration({
-    "iceServers": [
-        {"urls": ["stun:stun.l.google.com:19302"]},
-        {"urls": ["stun:stun1.l.google.com:19302"]},
-        {"urls": ["stun:stun2.l.google.com:19302"]},
-        {"urls": ["stun:stun.services.mozilla.com"]}
-    ]
-})
+# THREAD-SAFE ARCHITECTURE: Prevents silent crashes that kill the WebRTC connection
+@st.cache_resource
+def get_log_state():
+    return {"logged": set(), "lock": threading.Lock()}
+    
+log_state = get_log_state()
 
 def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
     try:
@@ -111,12 +100,12 @@ def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
                 text = f"{name} ({int(confidence)})"
                 color = (0, 255, 0)
                 
-                with log_lock:
-                    if name not in st.session_state.logged_users:
+                with log_state["lock"]:
+                    if name not in log_state["logged"]:
                         base_dir = os.path.dirname(os.path.abspath(os.path.join(__file__, "..")))
                         with open(os.path.join(base_dir, "attendance_log.txt"), "a") as log_f:
                             log_f.write(f"{name}, {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                        st.session_state.logged_users.add(name)
+                        log_state["logged"].add(name)
             else:
                 text = "Unknown"
                 color = (0, 0, 255)
@@ -128,14 +117,15 @@ def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
     except Exception as e:
-        # CRITICAL FIX: If OpenCV glitches, return original frame instead of freezing the stream
+        # Fallback to prevent the WebRTC stream from breaking completely
         return frame
 
+# HARDWARE FIX: Reverted to default video constraint to prevent PC crash
 webrtc_streamer(
     key="attendance_streamer",
     mode=WebRtcMode.SENDRECV,
-    rtc_configuration=RTC_CONFIGURATION,
+    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
     video_frame_callback=video_frame_callback,
-    media_stream_constraints={"video": {"facingMode": "user"}, "audio": False},
+    media_stream_constraints={"video": True, "audio": False},
     async_processing=True
 )
