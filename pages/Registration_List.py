@@ -26,11 +26,9 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .hero-title { font-family: 'DM Serif Display', serif; font-size: clamp(2rem, 5vw, 2.9rem); color: #1e1b4b; line-height: 1.18; margin-bottom: 0.5rem; font-weight: 400; }
 .hero-title span { font-style: italic; color: #6366f1; }
 .hero-sub { color: #64748b; font-size: 1rem; line-height: 1.65; max-width: 520px; margin-bottom: 1.8rem; }
-
 a[data-testid="stPageLink-NavLink"] { display: inline-flex; align-items: center; gap: 6px; color: #6366f1; font-size: 0.84rem; font-weight: 600; text-decoration: none; padding: 6px 0; opacity: 0.85; transition: opacity 0.15s; margin-bottom: 0.5rem; }
 a[data-testid="stPageLink-NavLink"]:hover { opacity: 1; }
 a[data-testid="stPageLink-NavLink"] p { font-weight: 600; margin: 0; color: #6366f1; }
-
 .person-card { display: flex; align-items: center; justify-content: space-between; background: white; border-radius: 14px; border: 1px solid rgba(0,0,0,0.06); box-shadow: 0 2px 10px rgba(0,0,0,0.04); padding: 0.85rem 1.1rem; margin-bottom: 0.55rem; transition: box-shadow 0.18s; }
 .person-card:hover { box-shadow: 0 4px 18px rgba(99,102,241,0.1); }
 .person-card.selected { border: 1.5px solid #6366f1; background: rgba(99,102,241,0.04); }
