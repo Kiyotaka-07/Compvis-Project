@@ -50,6 +50,7 @@ def get_ice_servers():
         return token.ice_servers
     except Exception as e:
         print(f"Twilio error: {e}")
+        st.error(f"SYSTEM ERROR: {e}") 
         st.markdown(
             '<div style="background-color: #fff3cd; color: #856404; padding: 1rem; border-radius: 0.5rem; border: 1px solid #ffeeba; margin-bottom: 1rem;">'
             '⚠️ <strong>Warning:</strong> Could not connect to Twilio TURN server. Falling back to free STUN.'
