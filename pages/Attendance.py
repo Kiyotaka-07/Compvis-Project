@@ -111,7 +111,7 @@ def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
             face_roi = cv2.resize(gray[y:y+h, x:x+w], (200, 200))
             label, confidence = recognizer.predict(face_roi)
 
-            if confidence < 60:
+            if confidence < 70:
                 name = label_dict.get(label, "Unknown")
                 text = f"{name} ({int(confidence)})"
                 color = (0, 255, 0)
