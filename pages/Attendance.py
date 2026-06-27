@@ -50,7 +50,12 @@ def get_ice_servers():
         return token.ice_servers
     except Exception as e:
         print(f"Twilio error: {e}")
-        st.warning("Could not connect to Twilio TURN server. Falling back to free STUN.")
+        st.markdown(
+            '<div style="background-color: #fff3cd; color: #856404; padding: 1rem; border-radius: 0.5rem; border: 1px solid #ffeeba; margin-bottom: 1rem;">'
+            '⚠️ <strong>Warning:</strong> Could not connect to Twilio TURN server. Falling back to free STUN.'
+            '</div>', 
+            unsafe_allow_html=True
+        )
         return [{"urls": ["stun:stun.l.google.com:19302"]}]
 
 @st.cache_resource
@@ -83,12 +88,6 @@ st.markdown("""
     Point the camera at a student's face. The system detects, recognises,
     and logs attendance automatically.
 </p>
-<div class="stats-strip">
-  <div class="stat-item">
-    <div class="stat-num">Live Logging Enabled</div>
-    <div class="stat-lbl">Check attendance_log.txt</div>
-  </div>
-</div>
 """, unsafe_allow_html=True)
 
 st.info("💡 **Tip:** Press **START** below. Use the built-in dropdown menu to switch between cameras on mobile/PC.")
