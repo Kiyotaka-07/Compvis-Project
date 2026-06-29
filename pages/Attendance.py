@@ -59,7 +59,6 @@ def get_ice_servers():
         )
         return [{"urls": ["stun:stun.l.google.com:19302"]}]
 
-@st.cache_resource
 def load_models():
     base_dir = os.path.dirname(os.path.abspath(os.path.join(__file__, "..")))
     haar_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
