@@ -99,6 +99,12 @@ if name and nim:
     if not os.path.exists(full_path):
         os.makedirs(full_path)
 
+    # Force the memory counter to match the actual number of files on the hard drive
+    with cap_state["lock"]:
+        actual_count = len(os.listdir(full_path))
+        cap_state["users"][user_folder] = {"count": actual_count, "last_time": 0}
+
+
     def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
         try:
             img = frame.to_ndarray(format="bgr24")
